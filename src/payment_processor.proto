@@ -2,8 +2,6 @@ syntax = "proto3";
 
 package cdk_payment_processor;
 
-option go_package = "github.com/asmogo/cdk-blink-payment-processor/pb";
-
 service CdkPaymentProcessor {
   rpc GetSettings(EmptyRequest) returns (SettingsResponse) {}
   rpc CreatePayment(CreatePaymentRequest) returns (CreatePaymentResponse) {}

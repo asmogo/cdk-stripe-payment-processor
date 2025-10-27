@@ -1,8 +1,8 @@
 # CDK Stripe Payment Processor
 
-A standalone gRPC service that implements the CDK payment processor protocol for Stripe payment processing. This service bridges the CDK payment processor interface to Stripe's REST API for traditional payment processing.
+A standalone gRPC service that implements the CDK payment processor protocol for Stripe payment processing. 
 
-**Extracted from:** [cdk-blink-payment-processor](https://github.com/asmogo/cdk-blink-payment-processor)
+This service bridges the CDK payment processor interface to Stripe's REST API for traditional payment processing.
 
 ## Features
 
