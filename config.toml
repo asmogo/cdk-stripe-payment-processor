@@ -1,0 +1,26 @@
+# Configuration for CDK Stripe Payment Processor
+# Copy to config.toml and edit values as needed
+
+# Stripe configuration
+[stripe]
+api_key = ""  # Stripe secret key (sk_...)
+account_id = ""  # Optional: Stripe Connect account ID
+stripe_version = ""  # Optional: API version override (e.g., "2023-10-16")
+timeout_ms = 15000  # Request timeout in milliseconds
+webhook_secret = ""  # Stripe webhook signing secret for event verification
+
+# gRPC server port
+server_port = 50051
+
+# TLS configuration
+# Enable TLS on the gRPC server. If true and the cert/key don't exist,
+# the server will generate a self-signed cert for localhost and write it
+# to the given paths.
+tls_enable = false
+tls_cert_path = "certs/server.crt"
+tls_key_path = "certs/server.key"
+
+# HTTP/2 keep-alive and connection age configuration (humantime durations)
+keep_alive_interval = "30s"
+keep_alive_timeout = "10s"
+max_connection_age = "30m"
