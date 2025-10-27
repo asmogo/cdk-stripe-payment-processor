@@ -184,38 +184,6 @@ cdk-stripe-payment-processor/
 - `create_refund` - Create a refund (infrastructure in place)
 - `retrieve_intent` - Retrieve a PaymentIntent by ID
 
-### Features
-
-- **USD/Cents Enforcement**: All amounts are in USD cents
-- **Automatic Retry**: Exponential backoff for transient errors (5xx, rate limits)
-- **Idempotency Keys**: Support for safe retries
-- **Configurable Timeouts**: Per-request timeout configuration
-- **API Version Headers**: Optional Stripe-Version header support
-- **Stripe Connect**: Optional Stripe-Account header for Connect accounts
-
-### Error Handling
-
-Stripe errors are mapped to appropriate gRPC status codes:
-- `invalid_request_error` → `INVALID_ARGUMENT`
-- `authentication_error` → `UNAUTHENTICATED`
-- `card_error` → `FAILED_PRECONDITION`
-- `rate_limit_error` → `UNAVAILABLE`
-- `api_error` → `UNAVAILABLE`
-
-## Development Notes
-
-- Logging uses tracing; configure with `RUST_LOG` (e.g., `RUST_LOG=info`)
-- Configuration precedence: defaults → config.toml → environment variables
-- No persistent storage; all state is managed through Stripe API
-- Webhook handling is stubbed but not fully implemented
-
-## Security
-
-- **Never commit real API keys** - Use environment variables or a local, untracked config.toml
-- Restrict network access appropriately when exposing the gRPC port
-- Use TLS in production environments
-- Implement proper webhook signature verification before processing events
-
 ## License
 
 MIT
