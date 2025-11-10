@@ -36,6 +36,7 @@ async fn main() -> Result<()> {
     if !cfg.stripe.webhook_secret.is_empty() {
         let webhook_port = cfg.server_port + 1; // Use next port for webhooks
         let payment_state = svc.stripe.payment_state();
+        let payout_state = svc.stripe.payout_state();
         let webhook_secret = cfg.stripe.webhook_secret.clone();
         let tolerance_seconds = cfg.stripe.webhook_tolerance_seconds;
         
@@ -43,6 +44,7 @@ async fn main() -> Result<()> {
             if let Err(e) = webhook_server::run_webhook_server(
                 webhook_port,
                 payment_state,
+                payout_state,
                 webhook_secret,
                 tolerance_seconds,
             ).await {

@@ -108,6 +108,81 @@ pub struct Refund {
     pub charge: Option<String>,
 }
 
+// Payout request structs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreatePayoutRequest {
+    pub amount: i64,
+    pub currency: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>, // "standard" or "instant"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub statement_descriptor: Option<String>,
+}
+
+// Payout minimal shape
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Payout {
+    pub id: String,
+    pub object: String,
+    pub amount: i64,
+    pub currency: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arrival_date: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_message: Option<String>,
+}
+
+// Transfer request structs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateTransferRequest {
+    pub amount: i64,
+    pub currency: String,
+    pub destination: String, // Connected account ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_type: Option<String>, // "card" or "bank_account"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::HashMap<String, String>>,
+}
+
+// Transfer minimal shape
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Transfer {
+    pub id: String,
+    pub object: String,
+    pub amount: i64,
+    pub currency: String,
+    pub destination: String, // Connected account ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reversed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_transaction: Option<String>,
+}
+
 // Stripe error envelope as returned by REST API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorEnvelope {
@@ -164,4 +239,20 @@ pub struct PaymentIntentSucceededEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaymentIntentEventData {
     pub object: PaymentIntent,
+}
+
+/// Typed wrapper for payout events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PayoutEvent {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub data: PayoutEventData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PayoutEventData {
+    pub object: Payout,
 }
