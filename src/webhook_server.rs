@@ -2,6 +2,7 @@
 
 use crate::stripe::errors::WebhookError;
 use crate::stripe::payment_state::PaymentState;
+use crate::stripe::payout_state::PayoutState;
 use crate::stripe::webhook;
 use axum::{
     body::Bytes,
@@ -18,6 +19,7 @@ use tracing::{error, info};
 #[derive(Clone)]
 pub struct WebhookState {
     pub payment_state: Arc<PaymentState>,
+    pub payout_state: Arc<PayoutState>,
     pub webhook_secret: String,
     pub tolerance_seconds: i64,
 }
@@ -25,11 +27,13 @@ pub struct WebhookState {
 pub async fn run_webhook_server(
     port: u16,
     payment_state: Arc<PaymentState>,
+    payout_state: Arc<PayoutState>,
     webhook_secret: String,
     tolerance_seconds: i64,
 ) -> anyhow::Result<()> {
     let state = WebhookState {
         payment_state,
+        payout_state,
         webhook_secret,
         tolerance_seconds,
     };
@@ -63,6 +67,7 @@ async fn handle_stripe_webhook(
         &state.webhook_secret,
         state.tolerance_seconds,
         state.payment_state.clone(),
+        state.payout_state.clone(),
     )
     .await
     {
@@ -101,6 +106,7 @@ mod tests {
     async fn test_webhook_missing_signature() {
         let state = WebhookState {
             payment_state: Arc::new(PaymentState::new()),
+            payout_state: Arc::new(PayoutState::new()),
             webhook_secret: "whsec_test".to_string(),
             tolerance_seconds: 300,
         };

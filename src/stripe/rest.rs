@@ -10,8 +10,8 @@ use tracing::{instrument, info, warn};
 
 use crate::stripe::errors::{StripeApiError, StripeErrorEnvelope, is_transient};
 use crate::stripe::types::{
-    ensure_usd_cents, ConfirmPaymentIntentRequest, CreateRefundRequest, PaymentIntent,
-    Refund,
+    ensure_usd_cents, ConfirmPaymentIntentRequest, CreateRefundRequest,
+    PaymentIntent, Payout, Refund, Transfer,
 };
 
 const STRIPE_API_BASE: &str = "https://api.stripe.com";
@@ -351,6 +351,255 @@ impl StripeRestClient {
         };
         self.with_retries(
             "retrieve_intent",
+            1,
+            self.base_delay_ms,
+            self.max_delay_ms,
+            req_builder,
+        ).await
+    }
+
+    // POST /v1/payouts
+    // Create a payout to transfer funds to an external account
+    #[instrument(skip(self, metadata), fields(method="POST", path="/v1/payouts", idempotency_key=?idempotency_key))]
+    pub async fn create_payout(
+        &self,
+        amount_cents: i64,
+        currency: &str,
+        destination: Option<&str>,
+        method: Option<&str>, // "standard" or "instant"
+        description: Option<&str>,
+        metadata: Option<&HashMap<String, String>>,
+        statement_descriptor: Option<&str>,
+        idempotency_key: Option<&str>,
+    ) -> Result<Payout, StripeApiError> {
+        // Enforce USD & non-negative cents via helpers
+        ensure_usd_cents(amount_cents, currency)
+            .map_err(|_| StripeApiError::Precondition("USD currency and non-negative cents required"))?;
+
+        // Build form fields
+        let mut form: Vec<(String, String)> = Vec::new();
+        form.push(("amount".into(), amount_cents.to_string()));
+        form.push(("currency".into(), currency.to_ascii_lowercase()));
+        
+        if let Some(dest) = destination {
+            form.push(("destination".into(), dest.to_string()));
+        }
+        if let Some(m) = method {
+            form.push(("method".into(), m.to_string()));
+        }
+        if let Some(desc) = description {
+            form.push(("description".into(), desc.to_string()));
+        }
+        if let Some(stmt) = statement_descriptor {
+            form.push(("statement_descriptor".into(), stmt.to_string()));
+        }
+        if let Some(meta) = metadata {
+            for (k, v) in meta {
+                form.push((format!("metadata[{}]", k), v.clone()));
+            }
+        }
+
+        info!(
+            target: "stripe",
+            method = "POST",
+            path = "/v1/payouts",
+            amount_cents = amount_cents,
+            currency = %currency,
+            method = method.unwrap_or("standard"),
+            idempotency_key = idempotency_key.unwrap_or(""),
+            "stripe request"
+        );
+
+        let req_builder = || {
+            let url = format!("{}/v1/payouts", STRIPE_API_BASE);
+            let req = self.http.post(url).form(&form);
+            let req = self.apply_common_headers(req, idempotency_key);
+            async move {
+                let resp = req.send().await.map_err(|e| StripeApiError::Http(e.to_string()))?;
+                let status = resp.status();
+                let text = resp.text().await.map_err(|e| StripeApiError::Decode(e.to_string()))?;
+                if status.is_success() {
+                    serde_json::from_str::<Payout>(&text).map_err(|e| StripeApiError::Decode(e.to_string()))
+                } else {
+                    Err(Self::map_error(status, &text))
+                }
+            }
+        };
+        self.with_retries(
+            "create_payout",
+            self.max_retries,
+            self.base_delay_ms,
+            self.max_delay_ms,
+            req_builder,
+        ).await
+    }
+
+    // GET /v1/payouts/{id}
+    #[instrument(skip(self), fields(method="GET", path="/v1/payouts/{id}", payout_id=%payout_id))]
+    pub async fn retrieve_payout(&self, payout_id: &str) -> Result<Payout, StripeApiError> {
+        info!(
+            target: "stripe",
+            method = "GET",
+            path = "/v1/payouts/{id}",
+            payout_id = %payout_id,
+            "stripe request"
+        );
+        // Keep retrieve lightweight: single retry only
+        let req_builder = || {
+            let url = format!("{}/v1/payouts/{}", STRIPE_API_BASE, payout_id);
+            let req = self.http.get(url);
+            let req = self.apply_common_headers(req, None);
+            async move {
+                let resp = req.send().await.map_err(|e| StripeApiError::Http(e.to_string()))?;
+                let status = resp.status();
+                let text = resp.text().await.map_err(|e| StripeApiError::Decode(e.to_string()))?;
+                if status.is_success() {
+                    serde_json::from_str::<Payout>(&text).map_err(|e| StripeApiError::Decode(e.to_string()))
+                } else {
+                    Err(Self::map_error(status, &text))
+                }
+            }
+        };
+        self.with_retries(
+            "retrieve_payout",
+            1,
+            self.base_delay_ms,
+            self.max_delay_ms,
+            req_builder,
+        ).await
+    }
+
+    // POST /v1/payouts/{id}/cancel
+    #[instrument(skip(self), fields(method="POST", path="/v1/payouts/{id}/cancel", payout_id=%payout_id))]
+    pub async fn cancel_payout(&self, payout_id: &str) -> Result<Payout, StripeApiError> {
+        info!(
+            target: "stripe",
+            method = "POST",
+            path = "/v1/payouts/{id}/cancel",
+            payout_id = %payout_id,
+            "stripe request"
+        );
+        let req_builder = || {
+            let url = format!("{}/v1/payouts/{}/cancel", STRIPE_API_BASE, payout_id);
+            let req = self.http.post(url);
+            let req = self.apply_common_headers(req, None);
+            async move {
+                let resp = req.send().await.map_err(|e| StripeApiError::Http(e.to_string()))?;
+                let status = resp.status();
+                let text = resp.text().await.map_err(|e| StripeApiError::Decode(e.to_string()))?;
+                if status.is_success() {
+                    serde_json::from_str::<Payout>(&text).map_err(|e| StripeApiError::Decode(e.to_string()))
+                } else {
+                    Err(Self::map_error(status, &text))
+                }
+            }
+        };
+        self.with_retries(
+            "cancel_payout",
+            self.max_retries,
+            self.base_delay_ms,
+            self.max_delay_ms,
+            req_builder,
+        ).await
+    }
+
+    // POST /v1/transfers
+    // Create a transfer to a connected Stripe account
+    #[instrument(skip(self, metadata), fields(method="POST", path="/v1/transfers", idempotency_key=?idempotency_key))]
+    pub async fn create_transfer(
+        &self,
+        amount_cents: i64,
+        currency: &str,
+        destination: &str, // Connected account ID
+        description: Option<&str>,
+        metadata: Option<&HashMap<String, String>>,
+        source_type: Option<&str>, // "card" or "bank_account"
+        idempotency_key: Option<&str>,
+    ) -> Result<Transfer, StripeApiError> {
+        // Enforce USD & non-negative cents via helpers
+        ensure_usd_cents(amount_cents, currency)
+            .map_err(|_| StripeApiError::Precondition("USD currency and non-negative cents required"))?;
+
+        // Build form fields
+        let mut form: Vec<(String, String)> = Vec::new();
+        form.push(("amount".into(), amount_cents.to_string()));
+        form.push(("currency".into(), currency.to_ascii_lowercase()));
+        form.push(("destination".into(), destination.to_string()));
+        
+        // Add source_type to specify which balance to use (defaults to "card" for available balance)
+        if let Some(st) = source_type {
+            form.push(("source_type".into(), st.to_string()));
+        } else {
+            // Default to card (available balance) if not specified
+            form.push(("source_type".into(), "card".to_string()));
+        }
+        
+
+
+        info!(
+            target: "stripe",
+            method = "POST",
+            path = "/v1/transfers",
+            amount_cents = amount_cents,
+            currency = %currency,
+            destination = %destination,
+            source_type = source_type.unwrap_or("card"),
+            idempotency_key = idempotency_key.unwrap_or(""),
+            "stripe request"
+        );
+
+        let req_builder = || {
+            let url = format!("{}/v1/transfers", STRIPE_API_BASE);
+            let req = self.http.post(url).form(&form);
+            let req = self.apply_common_headers(req, idempotency_key);
+            async move {
+                let resp = req.send().await.map_err(|e| StripeApiError::Http(e.to_string()))?;
+                let status = resp.status();
+                let text = resp.text().await.map_err(|e| StripeApiError::Decode(e.to_string()))?;
+                if status.is_success() {
+                    serde_json::from_str::<Transfer>(&text).map_err(|e| StripeApiError::Decode(e.to_string()))
+                } else {
+                    Err(Self::map_error(status, &text))
+                }
+            }
+        };
+        self.with_retries(
+            "create_transfer",
+            self.max_retries,
+            self.base_delay_ms,
+            self.max_delay_ms,
+            req_builder,
+        ).await
+    }
+
+    // GET /v1/transfers/{id}
+    #[instrument(skip(self), fields(method="GET", path="/v1/transfers/{id}", transfer_id=%transfer_id))]
+    pub async fn retrieve_transfer(&self, transfer_id: &str) -> Result<Transfer, StripeApiError> {
+        info!(
+            target: "stripe",
+            method = "GET",
+            path = "/v1/transfers/{id}",
+            transfer_id = %transfer_id,
+            "stripe request"
+        );
+        // Keep retrieve lightweight: single retry only
+        let req_builder = || {
+            let url = format!("{}/v1/transfers/{}", STRIPE_API_BASE, transfer_id);
+            let req = self.http.get(url);
+            let req = self.apply_common_headers(req, None);
+            async move {
+                let resp = req.send().await.map_err(|e| StripeApiError::Http(e.to_string()))?;
+                let status = resp.status();
+                let text = resp.text().await.map_err(|e| StripeApiError::Decode(e.to_string()))?;
+                if status.is_success() {
+                    serde_json::from_str::<Transfer>(&text).map_err(|e| StripeApiError::Decode(e.to_string()))
+                } else {
+                    Err(Self::map_error(status, &text))
+                }
+            }
+        };
+        self.with_retries(
+            "retrieve_transfer",
             1,
             self.base_delay_ms,
             self.max_delay_ms,

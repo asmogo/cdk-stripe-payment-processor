@@ -2,7 +2,8 @@
 
 use crate::stripe::errors::WebhookError;
 use crate::stripe::payment_state::{PaymentState, PaymentStatus};
-use crate::stripe::types::{PaymentIntent, StripeEvent};
+use crate::stripe::payout_state::{PayoutState, PayoutStatus};
+use crate::stripe::types::{PaymentIntent, Payout, StripeEvent, Transfer};
 use crate::stripe_counter_inc;
 use anyhow::Result;
 use std::sync::Arc;
@@ -10,13 +11,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, instrument, warn};
 
 /// Main webhook handler - verifies signature and processes event
-#[instrument(skip(payload, headers, payment_state))]
+#[instrument(skip(payload, headers, payment_state, payout_state))]
 pub async fn handle_webhook(
     payload: &[u8],
     headers: &http::HeaderMap,
     webhook_secret: &str,
     tolerance_seconds: i64,
     payment_state: Arc<PaymentState>,
+    payout_state: Arc<PayoutState>,
 ) -> Result<(), WebhookError> {
     // Verify signature
     verify_signature(payload, headers, webhook_secret, tolerance_seconds)?;
@@ -28,7 +30,7 @@ pub async fn handle_webhook(
     stripe_counter_inc!("stripe.webhook.received", "event_type" => &evt.event_type);
 
     // Process event
-    process_event(&evt, payment_state).await?;
+    process_event(&evt, payment_state, payout_state).await?;
 
     Ok(())
 }
@@ -139,10 +141,11 @@ pub fn verify_signature(
 }
 
 /// Process webhook event and dispatch to appropriate handlers
-#[instrument(skip(evt, payment_state))]
+#[instrument(skip(evt, payment_state, payout_state))]
 pub async fn process_event(
     evt: &StripeEvent,
     payment_state: Arc<PaymentState>,
+    payout_state: Arc<PayoutState>,
 ) -> Result<(), WebhookError> {
     let event_type = evt.event_type.as_str();
 
@@ -164,6 +167,34 @@ pub async fn process_event(
         "payment_intent.canceled" => {
             handle_payment_intent_canceled(evt, payment_state).await?;
             stripe_counter_inc!("stripe.webhook.processed", "event_type" => "payment_intent.canceled", "status" => "success");
+        }
+        "payout.paid" => {
+            handle_payout_paid(evt, payout_state).await?;
+            stripe_counter_inc!("stripe.webhook.processed", "event_type" => "payout.paid", "status" => "success");
+        }
+        "payout.failed" => {
+            handle_payout_failed(evt, payout_state).await?;
+            stripe_counter_inc!("stripe.webhook.processed", "event_type" => "payout.failed", "status" => "success");
+        }
+        "payout.canceled" => {
+            handle_payout_canceled(evt, payout_state).await?;
+            stripe_counter_inc!("stripe.webhook.processed", "event_type" => "payout.canceled", "status" => "success");
+        }
+        "payout.created" => {
+            handle_payout_created(evt, payout_state).await?;
+            stripe_counter_inc!("stripe.webhook.processed", "event_type" => "payout.created", "status" => "success");
+        }
+        "transfer.created" => {
+            handle_transfer_created(evt, payout_state).await?;
+            stripe_counter_inc!("stripe.webhook.processed", "event_type" => "transfer.created", "status" => "success");
+        }
+        "transfer.reversed" => {
+            handle_transfer_reversed(evt, payout_state).await?;
+            stripe_counter_inc!("stripe.webhook.processed", "event_type" => "transfer.reversed", "status" => "success");
+        }
+        "transfer.updated" => {
+            handle_transfer_updated(evt, payout_state).await?;
+            stripe_counter_inc!("stripe.webhook.processed", "event_type" => "transfer.updated", "status" => "success");
         }
         _ => {
             info!(event_type = %event_type, "Ignoring unknown/unsupported event type");
@@ -275,6 +306,266 @@ async fn handle_payment_intent_canceled(
 
     payment_state.mark_completed(&intent.id).await;
     stripe_counter_inc!("stripe.payment.canceled");
+
+    Ok(())
+}
+
+/// Handle payout.created event
+async fn handle_payout_created(
+    evt: &StripeEvent,
+    payout_state: Arc<PayoutState>,
+) -> Result<(), WebhookError> {
+    let payout: Payout = serde_json::from_value(evt.data.object.clone())
+        .map_err(|e| WebhookError::ProcessingFailed(format!("Failed to parse Payout: {}", e)))?;
+
+    info!(
+        payout_id = %payout.id,
+        amount = payout.amount,
+        currency = %payout.currency,
+        method = %payout.method.as_deref().unwrap_or("standard"),
+        "Payout created"
+    );
+
+    let receivers = payout_state
+        .publish_status(
+            &payout.id,
+            PayoutStatus::Pending,
+            Some("Payout created and pending".to_string()),
+            Some(&evt.id),
+        )
+        .await
+        .map_err(|e| WebhookError::ProcessingFailed(format!("Failed to publish status: {}", e)))?;
+
+    if receivers > 0 {
+        stripe_counter_inc!("stripe.payout.created", "has_waiter" => "true");
+    } else {
+        debug!(
+            payout_id = %payout.id,
+            "Payout created but no waiters registered"
+        );
+        stripe_counter_inc!("stripe.payout.created", "has_waiter" => "false");
+    }
+
+    Ok(())
+}
+
+/// Handle payout.paid event
+async fn handle_payout_paid(
+    evt: &StripeEvent,
+    payout_state: Arc<PayoutState>,
+) -> Result<(), WebhookError> {
+    let payout: Payout = serde_json::from_value(evt.data.object.clone())
+        .map_err(|e| WebhookError::ProcessingFailed(format!("Failed to parse Payout: {}", e)))?;
+
+    info!(
+        payout_id = %payout.id,
+        amount = payout.amount,
+        currency = %payout.currency,
+        "Payout paid"
+    );
+
+    let receivers = payout_state
+        .publish_status(
+            &payout.id,
+            PayoutStatus::Paid {
+                amount: payout.amount,
+                currency: payout.currency.clone(),
+            },
+            Some("Payout completed successfully".to_string()),
+            Some(&evt.id),
+        )
+        .await
+        .map_err(|e| WebhookError::ProcessingFailed(format!("Failed to publish status: {}", e)))?;
+
+    if receivers > 0 {
+        payout_state.mark_completed(&payout.id).await;
+        stripe_counter_inc!("stripe.payout.completed", "has_waiter" => "true");
+    } else {
+        warn!(
+            payout_id = %payout.id,
+            "Payout paid but no waiters registered"
+        );
+        stripe_counter_inc!("stripe.payout.completed", "has_waiter" => "false");
+    }
+
+    Ok(())
+}
+
+/// Handle payout.failed event
+async fn handle_payout_failed(
+    evt: &StripeEvent,
+    payout_state: Arc<PayoutState>,
+) -> Result<(), WebhookError> {
+    let payout: Payout = serde_json::from_value(evt.data.object.clone())
+        .map_err(|e| WebhookError::ProcessingFailed(format!("Failed to parse Payout: {}", e)))?;
+
+    warn!(
+        payout_id = %payout.id,
+        status = %payout.status,
+        failure_code = %payout.failure_code.as_deref().unwrap_or("unknown"),
+        failure_message = %payout.failure_message.as_deref().unwrap_or("no message"),
+        "Payout failed"
+    );
+
+    let reason = format!(
+        "Payout failed: {} - {}",
+        payout.failure_code.as_deref().unwrap_or("unknown"),
+        payout.failure_message.as_deref().unwrap_or("no details provided")
+    );
+    
+    payout_state
+        .publish_status(
+            &payout.id,
+            PayoutStatus::Failed { reason: reason.clone() },
+            Some(reason),
+            Some(&evt.id),
+        )
+        .await
+        .map_err(|e| WebhookError::ProcessingFailed(format!("Failed to publish status: {}", e)))?;
+
+    payout_state.mark_completed(&payout.id).await;
+    stripe_counter_inc!("stripe.payout.failed");
+
+    Ok(())
+}
+
+/// Handle payout.canceled event
+async fn handle_payout_canceled(
+    evt: &StripeEvent,
+    payout_state: Arc<PayoutState>,
+) -> Result<(), WebhookError> {
+    let payout: Payout = serde_json::from_value(evt.data.object.clone())
+        .map_err(|e| WebhookError::ProcessingFailed(format!("Failed to parse Payout: {}", e)))?;
+
+    info!(
+        payout_id = %payout.id,
+        "Payout canceled"
+    );
+
+    payout_state
+        .publish_status(
+            &payout.id,
+            PayoutStatus::Canceled,
+            Some("Payout was canceled".to_string()),
+            Some(&evt.id),
+        )
+        .await
+        .map_err(|e| WebhookError::ProcessingFailed(format!("Failed to publish status: {}", e)))?;
+
+    payout_state.mark_completed(&payout.id).await;
+    stripe_counter_inc!("stripe.payout.canceled");
+
+    Ok(())
+}
+
+/// Handle transfer.created event
+async fn handle_transfer_created(
+    evt: &StripeEvent,
+    payout_state: Arc<PayoutState>,
+) -> Result<(), WebhookError> {
+    let transfer: Transfer = serde_json::from_value(evt.data.object.clone())
+        .map_err(|e| WebhookError::ProcessingFailed(format!("Failed to parse Transfer: {}", e)))?;
+
+    info!(
+        transfer_id = %transfer.id,
+        amount = transfer.amount,
+        currency = %transfer.currency,
+        destination = %transfer.destination,
+        "Transfer created"
+    );
+
+    // Transfers are created and completed immediately (unless reversed later)
+    let receivers = payout_state
+        .publish_status(
+            &transfer.id,
+            PayoutStatus::Paid {
+                amount: transfer.amount,
+                currency: transfer.currency.clone(),
+            },
+            Some("Transfer completed successfully".to_string()),
+            Some(&evt.id),
+        )
+        .await
+        .map_err(|e| WebhookError::ProcessingFailed(format!("Failed to publish status: {}", e)))?;
+
+    if receivers > 0 {
+        payout_state.mark_completed(&transfer.id).await;
+        stripe_counter_inc!("stripe.transfer.created", "has_waiter" => "true");
+    } else {
+        debug!(
+            transfer_id = %transfer.id,
+            "Transfer created but no waiters registered"
+        );
+        stripe_counter_inc!("stripe.transfer.created", "has_waiter" => "false");
+    }
+
+    Ok(())
+}
+
+/// Handle transfer.reversed event
+async fn handle_transfer_reversed(
+    evt: &StripeEvent,
+    payout_state: Arc<PayoutState>,
+) -> Result<(), WebhookError> {
+    let transfer: Transfer = serde_json::from_value(evt.data.object.clone())
+        .map_err(|e| WebhookError::ProcessingFailed(format!("Failed to parse Transfer: {}", e)))?;
+
+    warn!(
+        transfer_id = %transfer.id,
+        "Transfer reversed"
+    );
+
+    let reason = "Transfer was reversed".to_string();
+    
+    payout_state
+        .publish_status(
+            &transfer.id,
+            PayoutStatus::Failed { reason: reason.clone() },
+            Some(reason),
+            Some(&evt.id),
+        )
+        .await
+        .map_err(|e| WebhookError::ProcessingFailed(format!("Failed to publish status: {}", e)))?;
+
+    payout_state.mark_completed(&transfer.id).await;
+    stripe_counter_inc!("stripe.transfer.reversed");
+
+    Ok(())
+}
+
+/// Handle transfer.updated event
+async fn handle_transfer_updated(
+    evt: &StripeEvent,
+    payout_state: Arc<PayoutState>,
+) -> Result<(), WebhookError> {
+    let transfer: Transfer = serde_json::from_value(evt.data.object.clone())
+        .map_err(|e| WebhookError::ProcessingFailed(format!("Failed to parse Transfer: {}", e)))?;
+
+    debug!(
+        transfer_id = %transfer.id,
+        reversed = %transfer.reversed.unwrap_or(false),
+        "Transfer updated"
+    );
+
+    // Check if the transfer was reversed
+    if transfer.reversed.unwrap_or(false) {
+        let reason = "Transfer was reversed".to_string();
+        
+        payout_state
+            .publish_status(
+                &transfer.id,
+                PayoutStatus::Failed { reason: reason.clone() },
+                Some(reason),
+                Some(&evt.id),
+            )
+            .await
+            .map_err(|e| WebhookError::ProcessingFailed(format!("Failed to publish status: {}", e)))?;
+
+        payout_state.mark_completed(&transfer.id).await;
+        stripe_counter_inc!("stripe.transfer.updated", "status" => "reversed");
+    } else {
+        stripe_counter_inc!("stripe.transfer.updated", "status" => "other");
+    }
 
     Ok(())
 }
