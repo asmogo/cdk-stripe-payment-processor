@@ -9,6 +9,7 @@ pub mod payment_state;
 pub mod payout_state;
 pub mod payment_request;
 pub mod quote_store;
+pub mod database;
 
 use reqwest::Client;
 use std::sync::Arc;
@@ -16,6 +17,7 @@ use crate::settings::StripeSettings;
 use self::payment_state::PaymentState;
 use self::payout_state::PayoutState;
 use self::quote_store::QuoteStore;
+use self::database::StripeDatabase;
 
 
 #[derive(Clone)]
@@ -28,7 +30,7 @@ pub struct StripeProvider {
 
 impl StripeProvider {
     // Build reqwest client with rustls and timeout from cfg, store cfg clone.
-    pub fn new(cfg: StripeSettings) -> Result<Self, crate::stripe::errors::StripeApiError> {
+    pub fn new(cfg: StripeSettings) -> anyhow::Result<Self> {
         let timeout = std::time::Duration::from_millis(if cfg.timeout_ms > 0 { cfg.timeout_ms } else { 15_000 });
         let http = Client::builder()
             .use_rustls_tls()
@@ -43,8 +45,13 @@ impl StripeProvider {
         let payment_state = Arc::new(PaymentState::new());
         let payout_state = Arc::new(PayoutState::new());
         
-        // Initialize quote store with default 30-minute TTL
-        let quote_store = Arc::new(QuoteStore::new());
+        // Initialize database
+        let db_path = cfg.db_path();
+        tracing::info!("Initializing Stripe database at: {:?}", db_path);
+        let db = Arc::new(StripeDatabase::new(&db_path)?);
+
+        // Initialize quote store with database
+        let quote_store = Arc::new(QuoteStore::new(db));
 
         Ok(Self {
             rest,

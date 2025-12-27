@@ -20,6 +20,14 @@ pub struct StripeSettings {
     pub webhook_tolerance_seconds: i64,
     #[serde(default = "default_payment_timeout", with = "humantime_serde")]
     pub payment_timeout: Duration,
+    #[serde(default)]
+    pub work_dir: String,
+}
+
+impl StripeSettings {
+    pub fn db_path(&self) -> std::path::PathBuf {
+        std::path::Path::new(&self.work_dir).join("stripe.redb")
+    }
 }
 
 impl Default for StripeSettings {
@@ -32,6 +40,7 @@ impl Default for StripeSettings {
             webhook_secret: String::new(),
             webhook_tolerance_seconds: default_webhook_tolerance_seconds(),
             payment_timeout: default_payment_timeout(),
+            work_dir: ".".to_string(),
         }
     }
 }
@@ -105,6 +114,9 @@ impl Config {
         }
         if let Ok(v) = std::env::var("STRIPE_PAYMENT_TIMEOUT") {
             cfg.stripe.payment_timeout = parse_duration_env(&v, cfg.stripe.payment_timeout);
+        }
+        if let Ok(v) = std::env::var("STRIPE_WORK_DIR") {
+            cfg.stripe.work_dir = v;
         }
         if let Ok(v) = std::env::var("SERVER_PORT") {
             cfg.server_port = v.parse().unwrap_or(cfg.server_port);

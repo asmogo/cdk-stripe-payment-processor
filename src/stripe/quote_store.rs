@@ -1,52 +1,21 @@
 // Quote storage for two-step payout flow
 
 use anyhow::Result;
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tracing::debug;
-use uuid::Uuid;
 
+use crate::stripe::database::StripeDatabase;
 use crate::stripe::payment_request::StripePayoutRequest;
+use crate::stripe::types::PayoutQuote;
 
-/// Stored quote information
-#[derive(Debug, Clone)]
-pub struct PayoutQuote {
-    /// Unique quote ID (UUID v4)
-    pub quote_id: String,
-    
-    /// Parsed payment request
-    pub payment_request: StripePayoutRequest,
-    
-    /// Calculated fee in cents
-    pub fee_cents: i64,
-}
-
-impl PayoutQuote {
-    fn new(
-        payment_request: StripePayoutRequest,
-    ) -> Self {
-        let quote_id = Uuid::new_v4().to_string();
-        let fee_cents = payment_request.calculate_fee();
-        
-        Self {
-            quote_id,
-            payment_request,
-            fee_cents,
-        }
-    }
-}
-
-/// In-memory quote storage
+/// Database-backed quote storage
 pub struct QuoteStore {
-    quotes: Arc<RwLock<HashMap<String, PayoutQuote>>>,
+    db: Arc<StripeDatabase>,
 }
 
 impl QuoteStore {
-    pub fn new() -> Self {
-        Self {
-            quotes: Arc::new(RwLock::new(HashMap::new())),
-        }
+    pub fn new(db: Arc<StripeDatabase>) -> Self {
+        Self { db }
     }
     
     /// Create a new quote from a payment request
@@ -55,8 +24,6 @@ impl QuoteStore {
         payment_request: StripePayoutRequest,
         encoded_request: String,
     ) -> Result<PayoutQuote> {
-        let mut quotes = self.quotes.write().await;
-        
         let quote = PayoutQuote::new(payment_request);
         let quote_id = quote.quote_id.clone();
         
@@ -68,13 +35,14 @@ impl QuoteStore {
             "Created new payout quote"
         );
         
-        quotes.insert(encoded_request, quote.clone());
+        // Persist to database
+        self.db.insert_payout_quote(&encoded_request, &quote)?;
+        
         Ok(quote)
     }
-}
 
-impl Default for QuoteStore {
-    fn default() -> Self {
-        Self::new()
+    /// Retrieve a quote by encoded request
+    pub async fn get_quote(&self, encoded_request: &str) -> Result<Option<PayoutQuote>> {
+        self.db.get_payout_quote(encoded_request)
     }
 }

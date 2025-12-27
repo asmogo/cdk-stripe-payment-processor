@@ -181,27 +181,33 @@ impl pb::cdk_payment_processor_server::CdkPaymentProcessor for PaymentProcessorS
             }
             None => return Err(Status::invalid_argument("payment options required")),
         };
-        let payout_request = StripePayoutRequest::decode(&json_request).unwrap();
+        // Verify quote exists and retrieve trusted details
+        let quote = self.stripe.quote_store().get_quote(&json_request).await
+            .map_err(|e| Status::internal(format!("failed to retrieve quote: {}", e)))?
+            .ok_or_else(|| Status::invalid_argument("Payment request (quote) not found or expired"))?;
+            
+        let payout_request = quote.payment_request;
 
         // Create metadata including quote_id and any custom metadata from the payment request
         let mut metadata = HashMap::new();
-        metadata.insert("amount_cents".to_string(), payout_request.clone().amount_cents.to_string());
-        for (k, v) in payout_request.clone().metadata {
+        metadata.insert("amount_cents".to_string(), payout_request.amount_cents.to_string());
+        metadata.insert("quote_id".to_string(), quote.quote_id);
+        for (k, v) in &payout_request.metadata {
             metadata.insert(k.clone(), v.clone());
         }
         
         // Create idempotency key for safe retries
-        let idempotency_key = format!("quote_{}", payout_request.payment_id.clone());
+        let idempotency_key = format!("quote_{}", payout_request.payment_id);
         
         // Create the transfer with details from the quote
         // Note: destination should be a connected Stripe account ID (e.g., acct_xxx)
         // source_type defaults to "card" (available balance)
         let transfer = self.stripe.rest()
             .create_transfer(
-                payout_request.clone().amount_cents,
-                payout_request.clone().currency.as_str(),
-                &payout_request.clone().destination,
-                payout_request.clone().description.as_deref(),
+                payout_request.amount_cents,
+                payout_request.currency.as_str(),
+                &payout_request.destination,
+                payout_request.description.as_deref(),
                 Some(&metadata),
                 Some("card"), // Use card balance (available balance)
                 Some(&idempotency_key),
