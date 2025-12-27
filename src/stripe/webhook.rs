@@ -227,7 +227,6 @@ async fn handle_payment_intent_succeeded(
                 amount: intent.amount,
                 currency: intent.currency.clone(),
             },
-            Some("Payment completed successfully".to_string()),
             Some(&evt.id),
         )
         .await
@@ -267,7 +266,6 @@ async fn handle_payment_intent_failed(
         .publish_status(
             &intent.id,
             PaymentStatus::Failed { reason: reason.clone() },
-            Some(reason),
             Some(&evt.id),
         )
         .await
@@ -298,7 +296,6 @@ async fn handle_payment_intent_canceled(
             PaymentStatus::Failed {
                 reason: "Payment canceled".to_string(),
             },
-            Some("Payment was canceled".to_string()),
             Some(&evt.id),
         )
         .await
@@ -330,7 +327,6 @@ async fn handle_payout_created(
         .publish_status(
             &payout.id,
             PayoutStatus::Pending,
-            Some("Payout created and pending".to_string()),
             Some(&evt.id),
         )
         .await
@@ -371,7 +367,6 @@ async fn handle_payout_paid(
                 amount: payout.amount,
                 currency: payout.currency.clone(),
             },
-            Some("Payout completed successfully".to_string()),
             Some(&evt.id),
         )
         .await
@@ -417,7 +412,6 @@ async fn handle_payout_failed(
         .publish_status(
             &payout.id,
             PayoutStatus::Failed { reason: reason.clone() },
-            Some(reason),
             Some(&evt.id),
         )
         .await
@@ -446,7 +440,6 @@ async fn handle_payout_canceled(
         .publish_status(
             &payout.id,
             PayoutStatus::Canceled,
-            Some("Payout was canceled".to_string()),
             Some(&evt.id),
         )
         .await
@@ -482,7 +475,6 @@ async fn handle_transfer_created(
                 amount: transfer.amount,
                 currency: transfer.currency.clone(),
             },
-            Some("Transfer completed successfully".to_string()),
             Some(&evt.id),
         )
         .await
@@ -521,7 +513,6 @@ async fn handle_transfer_reversed(
         .publish_status(
             &transfer.id,
             PayoutStatus::Failed { reason: reason.clone() },
-            Some(reason),
             Some(&evt.id),
         )
         .await
@@ -555,7 +546,6 @@ async fn handle_transfer_updated(
             .publish_status(
                 &transfer.id,
                 PayoutStatus::Failed { reason: reason.clone() },
-                Some(reason),
                 Some(&evt.id),
             )
             .await

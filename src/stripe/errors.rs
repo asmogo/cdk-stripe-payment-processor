@@ -135,12 +135,6 @@ pub fn is_transient(http_status: Option<u16>, type_: Option<&StripeErrorType>) -
     }
 }
 
-// Marker error for retryable cases
-#[derive(Debug, Error)]
-#[error("transient error: {reason}")]
-pub struct TransientError {
-    pub reason: String,
-}
 
 // Webhook-specific errors
 #[derive(Debug, Error)]
@@ -155,23 +149,6 @@ pub enum WebhookError {
     MissingSecret,
     #[error("missing signature header")]
     MissingSignature,
-    #[error("unknown event type: {0}")]
-    UnknownEventType(String),
     #[error("event processing failed: {0}")]
     ProcessingFailed(String),
-}
-
-impl WebhookError {
-    /// Map webhook error to HTTP status code
-    pub fn status_code(&self) -> u16 {
-        match self {
-            WebhookError::InvalidSignature(_) => 401,
-            WebhookError::TimestampTolerance(_) => 400,
-            WebhookError::MalformedPayload(_) => 400,
-            WebhookError::MissingSecret => 500,
-            WebhookError::MissingSignature => 401,
-            WebhookError::UnknownEventType(_) => 400,
-            WebhookError::ProcessingFailed(_) => 500,
-        }
-    }
 }

@@ -11,14 +11,13 @@ use crate::stripe::payment_request::StripePayoutRequest;
 use crate::stripe::StripeProvider;
 
 pub struct PaymentProcessorService {
-    cfg: Config,
     pub(crate) stripe: StripeProvider,
 }
 
 impl PaymentProcessorService {
     pub async fn try_new(cfg: Config) -> Result<Self> {
         let stripe = StripeProvider::new(cfg.stripe.clone())?;
-        Ok(Self { cfg, stripe })
+        Ok(Self { stripe })
     }
 }
 
@@ -83,7 +82,7 @@ impl pb::cdk_payment_processor_server::CdkPaymentProcessor for PaymentProcessorS
         // Register this payment with PaymentState so webhooks can notify waiters
         let payment_state = self.stripe.payment_state();
         let _rx = payment_state
-            .register_waiter(&intent.id, metadata.clone())
+            .register_waiter(&intent.id)
             .await
             .map_err(|e| Status::internal(format!("failed to register payment waiter: {}", e)))?;
         
@@ -220,7 +219,7 @@ impl pb::cdk_payment_processor_server::CdkPaymentProcessor for PaymentProcessorS
         // Note: We're reusing PayoutState for transfers - you may want to rename this later
         let payout_state = self.stripe.payout_state();
         let _rx = payout_state
-            .register_waiter(&transfer.id, metadata.clone())
+            .register_waiter(&transfer.id)
             .await
             .map_err(|e| Status::internal(format!("failed to register transfer waiter: {}", e)))?;
         
@@ -344,56 +343,60 @@ impl pb::cdk_payment_processor_server::CdkPaymentProcessor for PaymentProcessorS
         &self,
         _request: Request<pb::EmptyRequest>,
     ) -> Result<Response<Self::WaitIncomingPaymentStream>, Status> {
-        // Note: In the CDK protocol, wait_incoming_payment typically waits for ANY incoming payment
-        // This is a simplified implementation that demonstrates the streaming pattern
-        // In production, you might maintain a queue of pending payments to wait for
-        
-        let timeout_duration = self.cfg.stripe.payment_timeout;
+        let mut rx = self.stripe.payment_state().subscribe();
+        let (tx, rx_grpc) = tokio::sync::mpsc::channel(32);
 
-        // Create a channel for the stream
-        let (tx, rx) = tokio::sync::mpsc::channel(32);
+        debug!("WaitIncomingPayment stream established");
 
-        debug!("WaitIncomingPayment stream established - will complete when webhook events arrive");
-
-        // Spawn background task to handle streaming
-        // This is a simplified implementation - in production you'd track multiple payments
         tokio::spawn(async move {
-            // Send initial processing status
-            let initial_msg = pb::WaitIncomingPaymentResponse {
-                payment_identifier: Some(pb::PaymentIdentifier {
-                    r#type: pb::PaymentIdentifierType::CustomId as i32,
-                    value: Some(pb::payment_identifier::Value::Id("awaiting_webhook".to_string())),
-                }),
-                payment_amount: 0,
-                unit: "usd".to_string(),
-                payment_id: String::new(),
-            };
-
-            if tx.send(Ok(initial_msg)).await.is_err() {
-                debug!("WaitIncomingPayment stream closed before initial message sent");
-                return;
-            }
-
-            // In a real implementation, you would:
-            // 1. Listen to a queue of payment intents waiting for completion
-            // 2. Subscribe to their status updates via PaymentState
-            // 3. Stream updates as they arrive
-            // 4. Complete when any payment succeeds or timeout occurs
-            
-            // For now, just keep the stream alive until timeout
-            tokio::select! {
-                _ = tokio::time::sleep(timeout_duration) => {
-                    debug!("WaitIncomingPayment stream timed out");
-                    let _ = tx.send(Err(Status::deadline_exceeded(
-                        "No payment received within timeout period"
-                    ))).await;
-                }
-                _ = tx.closed() => {
-                    debug!("WaitIncomingPayment stream cancelled by client");
+            loop {
+                tokio::select! {
+                    update = rx.recv() => {
+                        match update {
+                            Ok(msg) => {
+                                debug!(
+                                    payment_intent_id = %msg.payment_intent_id,
+                                    status = ?msg.status,
+                                    "Received payment status update from broadcast"
+                                );
+                                if let crate::stripe::payment_state::PaymentStatus::Succeeded { amount, currency } = msg.status {
+                                    if amount <= 0 || msg.payment_intent_id.is_empty() {
+                                        debug!("Skipping invalid payment update (amount: {}, id: '{}')", amount, msg.payment_intent_id);
+                                        continue;
+                                    }
+                                    let resp = pb::WaitIncomingPaymentResponse {
+                                        payment_identifier: Some(pb::PaymentIdentifier {
+                                            r#type: pb::PaymentIdentifierType::CustomId as i32,
+                                            value: Some(pb::payment_identifier::Value::Id(msg.payment_intent_id.clone())),
+                                        }),
+                                        payment_amount: amount as u64,
+                                        unit: currency,
+                                        payment_id: msg.payment_intent_id,
+                                    };
+                                    
+                                    if tx.send(Ok(resp)).await.is_err() {
+                                        debug!("WaitIncomingPayment stream closed by client");
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                break;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                // Ignore lagging, but in production you might want to handle it
+                                continue;
+                            }
+                        }
+                    }
+                    _ = tx.closed() => {
+                        debug!("WaitIncomingPayment stream closed by client");
+                        break;
+                    }
                 }
             }
         });
 
-        Ok(Response::new(ReceiverStream::new(rx)))
+        Ok(Response::new(ReceiverStream::new(rx_grpc)))
     }
 }

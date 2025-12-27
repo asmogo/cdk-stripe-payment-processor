@@ -82,7 +82,6 @@ async fn handle_stripe_webhook(
                 WebhookError::MissingSignature => StatusCode::UNAUTHORIZED,
                 WebhookError::TimestampTolerance(_) => StatusCode::BAD_REQUEST,
                 WebhookError::MalformedPayload(_) => StatusCode::BAD_REQUEST,
-                WebhookError::UnknownEventType(_) => StatusCode::OK, // Accept but ignore
                 WebhookError::MissingSecret => StatusCode::INTERNAL_SERVER_ERROR,
                 WebhookError::ProcessingFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
             };
