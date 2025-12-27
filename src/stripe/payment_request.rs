@@ -55,39 +55,6 @@ pub enum PayoutMethod {
 }
 
 impl StripePayoutRequest {
-    /// Create a new payment request
-    pub fn new(
-        destination: String,
-        amount_cents: i64,
-        method: PayoutMethod,
-        payment_id: String,
-    ) -> Self {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let created_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        
-        Self {
-            version: 1,
-            destination,
-            amount_cents,
-            currency: "usd".to_string(),
-            method,
-            description: None,
-            statement_descriptor: None,
-            metadata: HashMap::new(),
-            created_at,
-            expires_at: None,
-            payment_id
-        }
-    }
-    
-    /// Encode to base64 JSON string for transmission
-    pub fn encode(&self) -> Result<String, serde_json::Error> {
-        let json = serde_json::to_string(self)?;
-        Ok(STANDARD.encode(json))
-    }
     
     /// Decode from base64 JSON string
     pub fn decode(encoded: &str) -> Result<Self, PaymentRequestError> {
@@ -120,9 +87,6 @@ impl StripePayoutRequest {
         if self.destination.is_empty() {
             return Err(PaymentRequestError::MissingDestination);
         }
-  /*      if !self.destination.starts_with("ba_") && !self.destination.starts_with("card_") {
-            return Err(PaymentRequestError::InvalidDestinationFormat);
-        }*/
         
         // Statement descriptor validation
         if let Some(ref desc) = self.statement_descriptor {
@@ -204,8 +168,6 @@ pub enum PaymentRequestError {
     #[error("Missing destination")]
     MissingDestination,
     
-    #[error("Invalid destination format: must start with 'ba_' or 'card_'")]
-    InvalidDestinationFormat,
     
     #[error("Statement descriptor too long for {method:?} payout: max {max}, got {actual}")]
     StatementDescriptorTooLong {

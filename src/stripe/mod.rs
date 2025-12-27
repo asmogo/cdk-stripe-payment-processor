@@ -12,21 +12,14 @@ pub mod quote_store;
 
 use reqwest::Client;
 use std::sync::Arc;
-use std::time::Duration;
 use crate::settings::StripeSettings;
 use self::payment_state::PaymentState;
 use self::payout_state::PayoutState;
 use self::quote_store::QuoteStore;
 
-// Minimal trait to mirror a generic payment provider.
-pub trait PaymentProvider: Send + Sync {
-    fn name(&self) -> &'static str;
-}
 
 #[derive(Clone)]
 pub struct StripeProvider {
-    pub(crate) http: Client,
-    pub(crate) cfg: StripeSettings,
     pub(crate) rest: self::rest::StripeRestClient,
     pub(crate) payment_state: Arc<PaymentState>,
     pub(crate) payout_state: Arc<PayoutState>,
@@ -47,18 +40,13 @@ impl StripeProvider {
             .with_account(if cfg.account_id.is_empty() { None } else { Some(cfg.account_id.clone()) })
             .with_version(if cfg.stripe_version.is_empty() { None } else { Some(cfg.stripe_version.clone()) });
 
-        let payment_state = Arc::new(PaymentState::new().with_ttl(cfg.payment_timeout));
-        let payout_state = Arc::new(PayoutState::new().with_ttl(cfg.payment_timeout));
+        let payment_state = Arc::new(PaymentState::new());
+        let payout_state = Arc::new(PayoutState::new());
         
         // Initialize quote store with default 30-minute TTL
-        let quote_store = Arc::new(
-            QuoteStore::new()
-                .with_ttl(Duration::from_secs(1800))
-        );
+        let quote_store = Arc::new(QuoteStore::new());
 
         Ok(Self {
-            http,
-            cfg: cfg.clone(),
             rest,
             payment_state,
             payout_state,
@@ -81,18 +69,5 @@ impl StripeProvider {
     pub fn quote_store(&self) -> Arc<QuoteStore> {
         Arc::clone(&self.quote_store)
     }
-
-    pub fn webhook_secret(&self) -> &str {
-        &self.cfg.webhook_secret
-    }
-
-    pub fn webhook_tolerance_seconds(&self) -> i64 {
-        self.cfg.webhook_tolerance_seconds
-    }
 }
 
-impl PaymentProvider for StripeProvider {
-    fn name(&self) -> &'static str {
-        "stripe"
-    }
-}
