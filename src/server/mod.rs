@@ -266,24 +266,22 @@ impl pb::cdk_payment_processor_server::CdkPaymentProcessor for PaymentProcessorS
             .retrieve_intent(&intent_id)
             .await
             .map_err(|e| Status::internal(format!("retrieve payment intent failed: {}", e)))?;
-        
-        // Convert cents back to sats (reverse of create_payment conversion)
-        let amount_sat = intent.amount as u64;
-        
+
+
         // Determine if payment is complete
-        let payment_id = if intent.status == "succeeded" {
-            intent.id.clone()
+        let payment_id = intent.id.clone();
+        let payment_amount = if intent.status == "succeeded" {
+            intent.amount as u64
         } else {
-            String::new()
+            0
         };
-        
         let resp = pb::CheckIncomingPaymentResponse {
             payments: vec![pb::WaitIncomingPaymentResponse {
                 payment_identifier: Some(pb::PaymentIdentifier {
                     r#type: pb::PaymentIdentifierType::CustomId as i32,
                     value: Some(pb::payment_identifier::Value::Id(intent.id)),
                 }),
-                payment_amount: amount_sat,
+                payment_amount,
                 unit: "usd".to_string(),
                 payment_id,
             }],
