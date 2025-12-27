@@ -114,34 +114,3 @@ pub struct StripeEventData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_attributes: Option<serde_json::Value>,
 }
-
-use uuid::Uuid;
-use crate::stripe::payment_request::StripePayoutRequest;
-
-/// Stored quote information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PayoutQuote {
-    /// Unique quote ID (UUID v4)
-    pub quote_id: String,
-    
-    /// Parsed payment request
-    pub payment_request: StripePayoutRequest,
-    
-    /// Calculated fee in cents
-    pub fee_cents: i64,
-}
-
-impl PayoutQuote {
-    pub fn new(
-        payment_request: StripePayoutRequest,
-    ) -> Self {
-        let quote_id = Uuid::new_v4().to_string();
-        let fee_cents = payment_request.calculate_fee();
-        
-        Self {
-            quote_id,
-            payment_request,
-            fee_cents,
-        }
-    }
-}
