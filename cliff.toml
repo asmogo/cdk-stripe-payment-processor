@@ -1,0 +1,36 @@
+# git-cliff configuration for changelog generation
+# https://git-cliff.org
+
+[changelog]
+header = """
+## What's Changed\n
+"""
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | upper_first | trim }}\
+{% endfor %}
+{% endfor %}
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+split_commits = false
+commit_parsers = [
+  { message = "^feat", group = "🚀 Features" },
+  { message = "^fix", group = "🐛 Bug Fixes" },
+  { message = "^doc", group = "📚 Documentation" },
+  { message = "^perf", group = "⚡ Performance" },
+  { message = "^refactor", group = "🔧 Refactor" },
+  { message = "^style", group = "🎨 Styling" },
+  { message = "^test", group = "🧪 Testing" },
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^chore", group = "📦 Miscellaneous" },
+  { body = ".*", group = "Other" },
+]
+filter_commits = false
+tag_pattern = "v[0-9].*"
